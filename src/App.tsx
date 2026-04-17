@@ -1,15 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Dumbbell, List, Plus, Image as ImageIcon, Check, X, Timer, Activity, Play, ChevronRight, Save, Copy, CheckCircle } from 'lucide-react';
+import { useState, useRef, useEffect, ChangeEvent } from 'react';
+import { Dumbbell, List, Plus, Image as ImageIcon, X, Timer, Activity, Play, ChevronRight, Save, Copy, CheckCircle } from 'lucide-react';
+
+// Importações do Firebase
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged, User } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-// Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
+// Sua configuração do Firebase (Limpa e direta)
 const firebaseConfig = {
   apiKey: "AIzaSyC5S8UckXqCkAZvc70kUeFjZgjYepZ4jo0",
   authDomain: "calitracker-app.firebaseapp.com",
@@ -19,11 +16,32 @@ const firebaseConfig = {
   appId: "1:465271718150:web:6a4d4f31660a17280f5e87"
 };
 
-// Initialize Firebase
+// Inicialização
 const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = 'meu-calitracker';
+
+// --- TIPAGENS TYPESCRIPT RIGOROSAS ---
+interface Exercise {
+  id: string;
+  name: string;
+  muscle: string;
+  type: string;
+  image: string | null;
+}
+
+interface WorkoutSet {
+  value: number;
+}
+
+interface WorkoutItem {
+  exerciseId: string;
+  sets: WorkoutSet[];
+}
 
 // Dados iniciais (salvos na nuvem no primeiro acesso)
-const INITIAL_EXERCISES = [
+const INITIAL_EXERCISES: Exercise[] = [
   { id: '1', name: 'Barra Fixa (Pull-up)', muscle: 'Costas', type: 'reps', image: null },
   { id: '2', name: 'Flexão (Push-up)', muscle: 'Peito', type: 'reps', image: null },
   { id: '3', name: 'Prancha', muscle: 'Abdômen', type: 'time', image: null },
@@ -31,18 +49,18 @@ const INITIAL_EXERCISES = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('workout');
-  const [exercises, setExercises] = useState([]);
-  const [currentWorkout, setCurrentWorkout] = useState([]);
+  const [activeTab, setActiveTab] = useState<'workout' | 'library'>('workout');
+  const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [currentWorkout, setCurrentWorkout] = useState<WorkoutItem[]>([]);
   
   // Estado da Nuvem/Autenticação
-  const [user, setUser] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Estados para Modais
-  const [isAddExerciseModalOpen, setIsAddExerciseModalOpen] = useState(false);
-  const [isLogExerciseModalOpen, setIsLogExerciseModalOpen] = useState(false);
-  const [selectedExerciseForLog, setSelectedExerciseForLog] = useState(null);
+  const [isAddExerciseModalOpen, setIsAddExerciseModalOpen] = useState<boolean>(false);
+  const [isLogExerciseModalOpen, setIsLogExerciseModalOpen] = useState<boolean>(false);
+  const [selectedExerciseForLog, setSelectedExerciseForLog] = useState<Exercise | null>(null);
 
   // 1. Iniciar Autenticação
   useEffect(() => {
@@ -71,12 +89,11 @@ export default function App() {
     const exRef = collection(db, 'artifacts', appId, 'users', user.uid, 'exercises');
     const unsubExercises = onSnapshot(exRef, (snap) => {
       if (snap.empty && exercises.length === 0) {
-        // Popula com exercícios iniciais se for a primeira vez
         INITIAL_EXERCISES.forEach(ex => {
           setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'exercises', ex.id), ex);
         });
       } else {
-        const loadedEx = snap.docs.map(d => d.data());
+        const loadedEx = snap.docs.map(d => d.data() as Exercise);
         setExercises(loadedEx);
       }
     }, (error) => console.error("Erro ao buscar exercícios:", error));
@@ -85,7 +102,7 @@ export default function App() {
     const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', todayId);
     const unsubWorkout = onSnapshot(workRef, (snap) => {
       if (snap.exists()) {
-        setCurrentWorkout(snap.data().items || []);
+        setCurrentWorkout(snap.data().items as WorkoutItem[] || []);
       } else {
         setCurrentWorkout([]);
       }
@@ -99,19 +116,18 @@ export default function App() {
   }, [user, todayId]);
 
   // Handlers para salvar na nuvem
-  const handleSaveExercise = async (newEx) => {
+  const handleSaveExercise = async (newEx: Exercise) => {
     if (!user) return;
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'exercises', newEx.id), newEx);
   };
 
-  const handleAddSet = async (exerciseId, valuesArray) => {
+  const handleAddSet = async (exerciseId: string, valuesArray: number[]) => {
     if (!user) return;
     const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', todayId);
     
     const updatedWorkout = [...currentWorkout];
     const exerciseIndex = updatedWorkout.findIndex(w => w.exerciseId === exerciseId);
     
-    // valuesArray já vem do modal como [8, 7, 6]
     const newSets = valuesArray.map(v => ({ value: v }));
     
     if (exerciseIndex >= 0) {
@@ -220,22 +236,28 @@ export default function App() {
 
 // --- VIEWS ---
 
-function WorkoutView({ exercises, currentWorkout, openLogModal, setSelectedExerciseForLog }) {
+interface WorkoutViewProps {
+  exercises: Exercise[];
+  currentWorkout: WorkoutItem[];
+  openLogModal: () => void;
+  setSelectedExerciseForLog: (ex: Exercise) => void;
+}
+
+function WorkoutView({ exercises, currentWorkout, openLogModal, setSelectedExerciseForLog }: WorkoutViewProps) {
   const [isCopied, setIsCopied] = useState(false);
 
   const handleExportWorkout = () => {
-    const exportText = currentWorkout.map(item => {
-      const ex = exercises.find(e => e.id === item.exerciseId);
+    const exportText = currentWorkout.map((item) => {
+      const ex = exercises.find((e) => e.id === item.exerciseId);
       if (!ex) return '';
       
       const numSets = item.sets.length;
-      const values = item.sets.map(s => s.value).join('-');
+      const values = item.sets.map((s) => s.value).join('-');
       const unit = ex.type === 'time' ? ' seg' : '';
       
       return `${numSets}x de ${values}${unit} de ${ex.name.toLowerCase()};`;
     }).join('\n');
 
-    // Abordagem robusta para copiar (funciona em iframes e mobile)
     const textArea = document.createElement("textarea");
     textArea.value = exportText;
     document.body.appendChild(textArea);
@@ -293,7 +315,7 @@ function WorkoutView({ exercises, currentWorkout, openLogModal, setSelectedExerc
 
       <div className="space-y-4">
         {currentWorkout.map((workoutItem, index) => {
-          const exercise = exercises.find(e => e.id === workoutItem.exerciseId);
+          const exercise = exercises.find((e) => e.id === workoutItem.exerciseId);
           if (!exercise) return null;
 
           return (
@@ -340,7 +362,12 @@ function WorkoutView({ exercises, currentWorkout, openLogModal, setSelectedExerc
   );
 }
 
-function LibraryView({ exercises, openAddModal }) {
+interface LibraryViewProps {
+  exercises: Exercise[];
+  openAddModal: () => void;
+}
+
+function LibraryView({ exercises, openAddModal }: LibraryViewProps) {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -348,7 +375,7 @@ function LibraryView({ exercises, openAddModal }) {
       </div>
 
       <div className="grid grid-cols-1 gap-3">
-        {exercises.map(exercise => (
+        {exercises.map((exercise) => (
           <div key={exercise.id} className="bg-white rounded-xl p-3 shadow-sm border border-slate-100 flex items-center gap-4">
              {exercise.image ? (
                 <img src={exercise.image} alt={exercise.name} className="w-16 h-16 rounded-xl object-cover bg-slate-100 shadow-sm" />
@@ -385,19 +412,24 @@ function LibraryView({ exercises, openAddModal }) {
 
 // --- MODALS ---
 
-function AddExerciseModal({ onClose, onSave }) {
+interface AddExerciseModalProps {
+  onClose: () => void;
+  onSave: (ex: Exercise) => void;
+}
+
+function AddExerciseModal({ onClose, onSave }: AddExerciseModalProps) {
   const [name, setName] = useState('');
   const [muscle, setMuscle] = useState('');
   const [type, setType] = useState('reps');
-  const [image, setImage] = useState(null);
-  const fileInputRef = useRef(null);
+  const [image, setImage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Comprime e redimensiona a imagem para não estourar o limite do Firestore
-  const handleImageUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
+  const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
       const reader = new FileReader();
-      reader.onload = (event) => {
+      reader.onload = (event: ProgressEvent<FileReader>) => {
+        if (!event.target?.result) return;
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
@@ -406,11 +438,10 @@ function AddExerciseModal({ onClose, onSave }) {
           canvas.width = MAX_WIDTH;
           canvas.height = img.height * scaleSize;
           const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          // Converte para Base64 leve (jpeg 70% qualidade)
+          if (ctx) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           setImage(canvas.toDataURL('image/jpeg', 0.7));
         };
-        img.src = event.target.result;
+        img.src = event.target.result as string;
       };
       reader.readAsDataURL(file);
     }
@@ -509,11 +540,19 @@ function AddExerciseModal({ onClose, onSave }) {
   );
 }
 
-function LogExerciseModal({ exercises, selectedExercise, setSelectedExercise, onClose, onAddSet }) {
+interface LogExerciseModalProps {
+  exercises: Exercise[];
+  selectedExercise: Exercise | null;
+  setSelectedExercise: (ex: Exercise | null) => void;
+  onClose: () => void;
+  onAddSet: (exerciseId: string, valuesArray: number[]) => void;
+}
+
+function LogExerciseModal({ exercises, selectedExercise, setSelectedExercise, onClose, onAddSet }: LogExerciseModalProps) {
   const [value, setValue] = useState('');
 
   const handleSaveSet = () => {
-    if (!value.trim()) return;
+    if (!value.trim() || !selectedExercise) return;
     
     // Converte textos como "8-7-6" ou "10, 8, 6" em um array de números [8, 7, 6]
     const cleanedString = value.replace(/[\s,xX]+/g, '-');
@@ -524,7 +563,7 @@ function LogExerciseModal({ exercises, selectedExercise, setSelectedExercise, on
     
     onAddSet(selectedExercise.id, valuesArray);
     setValue('');
-    onClose(); // Fechar o modal após salvar
+    onClose(); 
   };
 
   return (
@@ -543,7 +582,7 @@ function LogExerciseModal({ exercises, selectedExercise, setSelectedExercise, on
         <div className="flex-1 overflow-y-auto p-4 bg-slate-50">
           {!selectedExercise ? (
             <div className="space-y-2 pb-8">
-              {exercises.map(exercise => (
+              {exercises.map((exercise) => (
                 <button 
                   key={exercise.id}
                   onClick={() => setSelectedExercise(exercise)}

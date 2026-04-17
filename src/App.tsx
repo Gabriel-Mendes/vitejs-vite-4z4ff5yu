@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect, ChangeEvent } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import type { ChangeEvent } from 'react';
 import { Dumbbell, List, Plus, Image as ImageIcon, X, Timer, Activity, Play, ChevronRight, Save, Copy, CheckCircle } from 'lucide-react';
 
 // Importações do Firebase
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, User } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import type { User } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 // Sua configuração do Firebase (Limpa e direta)

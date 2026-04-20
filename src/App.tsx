@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ChangeEvent } from 'react';
-import { Dumbbell, List, Plus, Image as ImageIcon, X, Timer, Activity, Play, ChevronRight, Save, Copy, CheckCircle } from 'lucide-react';
+import { Dumbbell, List, Plus, Image as ImageIcon, X, Timer, Activity, Play, ChevronRight, Save, Copy, CheckCircle, Trash2, Edit2, Calendar } from 'lucide-react';
 
 // Importações do Firebase
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import type { User } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 
 // Sua configuração do Firebase (Limpa e direta)
 const firebaseConfig = {
@@ -55,6 +55,9 @@ export default function App() {
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [currentWorkout, setCurrentWorkout] = useState<WorkoutItem[]>([]);
   
+  // Data Selecionada (Padrão: Hoje)
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toLocaleDateString('en-CA'));
+
   // Estado da Nuvem/Autenticação
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -81,9 +84,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Buscar Dados do Firestore (Biblioteca e Treino de Hoje)
-  const todayId = new Date().toLocaleDateString('en-CA'); // Formato YYYY-MM-DD local
-
+  // 2. Buscar Dados do Firestore (Biblioteca e Treino da Data Selecionada)
   useEffect(() => {
     if (!user) return;
 
@@ -100,8 +101,15 @@ export default function App() {
       }
     }, (error) => console.error("Erro ao buscar exercícios:", error));
 
-    // Escutar Treino de Hoje
-    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', todayId);
+    return () => unsubExercises();
+  }, [user]);
+
+  // Escutar Treino sempre que a data mudar
+  useEffect(() => {
+    if (!user) return;
+    setIsLoading(true);
+
+    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
     const unsubWorkout = onSnapshot(workRef, (snap) => {
       if (snap.exists()) {
         setCurrentWorkout(snap.data().items as WorkoutItem[] || []);
@@ -109,23 +117,29 @@ export default function App() {
         setCurrentWorkout([]);
       }
       setIsLoading(false);
-    }, (error) => console.error("Erro ao buscar treino:", error));
+    }, (error) => {
+      console.error("Erro ao buscar treino:", error);
+      setIsLoading(false);
+    });
 
-    return () => {
-      unsubExercises();
-      unsubWorkout();
-    };
-  }, [user, todayId]);
+    return () => unsubWorkout();
+  }, [user, selectedDate]);
 
-  // Handlers para salvar na nuvem
+  // --- Handlers da Biblioteca ---
   const handleSaveExercise = async (newEx: Exercise) => {
     if (!user) return;
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'exercises', newEx.id), newEx);
   };
 
+  const handleDeleteExercise = async (exerciseId: string) => {
+    if (!user) return;
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'exercises', exerciseId));
+  };
+
+  // --- Handlers do Treino ---
   const handleAddSet = async (exerciseId: string, valuesArray: number[]) => {
     if (!user) return;
-    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', todayId);
+    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
     
     const updatedWorkout = [...currentWorkout];
     const exerciseIndex = updatedWorkout.findIndex(w => w.exerciseId === exerciseId);
@@ -138,10 +152,44 @@ export default function App() {
       updatedWorkout.push({ exerciseId, sets: newSets });
     }
     
-    await setDoc(workRef, { items: updatedWorkout, date: todayId }, { merge: true });
+    await setDoc(workRef, { items: updatedWorkout, date: selectedDate }, { merge: true });
   };
 
-  // Navegação
+  const handleRemoveWorkoutExercise = async (exerciseId: string) => {
+    if (!user) return;
+    const updatedWorkout = currentWorkout.filter(w => w.exerciseId !== exerciseId);
+    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
+    
+    if (updatedWorkout.length === 0) {
+      await deleteDoc(workRef);
+    } else {
+      await setDoc(workRef, { items: updatedWorkout, date: selectedDate }, { merge: true });
+    }
+  };
+
+  const handleRemoveSet = async (exerciseId: string, setIndex: number) => {
+    if (!user) return;
+    let updatedWorkout = [...currentWorkout];
+    const exIndex = updatedWorkout.findIndex(w => w.exerciseId === exerciseId);
+    
+    if (exIndex >= 0) {
+      updatedWorkout[exIndex].sets.splice(setIndex, 1);
+      
+      // Se não sobrou nenhuma série, remove o exercício inteiro
+      if (updatedWorkout[exIndex].sets.length === 0) {
+        updatedWorkout = updatedWorkout.filter(w => w.exerciseId !== exerciseId);
+      }
+    }
+    
+    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
+    if (updatedWorkout.length === 0) {
+      await deleteDoc(workRef);
+    } else {
+      await setDoc(workRef, { items: updatedWorkout, date: selectedDate }, { merge: true });
+    }
+  };
+
+  // --- Navegação ---
   const renderTab = () => {
     if (isLoading) {
       return (
@@ -160,6 +208,10 @@ export default function App() {
             currentWorkout={currentWorkout} 
             openLogModal={() => setIsLogExerciseModalOpen(true)}
             setSelectedExerciseForLog={setSelectedExerciseForLog}
+            selectedDate={selectedDate}
+            setSelectedDate={setSelectedDate}
+            onRemoveExercise={handleRemoveWorkoutExercise}
+            onRemoveSet={handleRemoveSet}
           />
         );
       case 'library':
@@ -167,6 +219,7 @@ export default function App() {
           <LibraryView 
             exercises={exercises} 
             openAddModal={() => setIsAddExerciseModalOpen(true)} 
+            onDeleteExercise={handleDeleteExercise}
           />
         );
       default:
@@ -200,7 +253,7 @@ export default function App() {
             className={`flex flex-col items-center p-2 w-full rounded-xl transition-colors ${activeTab === 'workout' ? 'text-emerald-600 bg-emerald-50' : 'text-slate-500 hover:bg-slate-100'}`}
           >
             <Dumbbell size={24} />
-            <span className="text-xs font-medium mt-1">Treino Atual</span>
+            <span className="text-xs font-medium mt-1">Treino</span>
           </button>
           <button 
             onClick={() => setActiveTab('library')}
@@ -243,10 +296,15 @@ interface WorkoutViewProps {
   currentWorkout: WorkoutItem[];
   openLogModal: () => void;
   setSelectedExerciseForLog: (ex: Exercise) => void;
+  selectedDate: string;
+  setSelectedDate: (date: string) => void;
+  onRemoveExercise: (id: string) => void;
+  onRemoveSet: (exId: string, setIndex: number) => void;
 }
 
-function WorkoutView({ exercises, currentWorkout, openLogModal, setSelectedExerciseForLog }: WorkoutViewProps) {
+function WorkoutView({ exercises, currentWorkout, openLogModal, setSelectedExerciseForLog, selectedDate, setSelectedDate, onRemoveExercise, onRemoveSet }: WorkoutViewProps) {
   const [isCopied, setIsCopied] = useState(false);
+  const [isEditingWorkout, setIsEditingWorkout] = useState(false);
 
   const handleExportWorkout = () => {
     const exportText = currentWorkout.map((item) => {
@@ -274,92 +332,136 @@ function WorkoutView({ exercises, currentWorkout, openLogModal, setSelectedExerc
     document.body.removeChild(textArea);
   };
 
-  if (currentWorkout.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-4">
-        <div className="bg-slate-100 p-6 rounded-full">
-          <Play className="text-slate-400" size={48} />
-        </div>
-        <div>
-          <h2 className="text-xl font-bold text-slate-800">Pronto para treinar?</h2>
-          <p className="text-slate-500 mt-2">Nenhum exercício registrado hoje.</p>
-        </div>
-        <button 
-          onClick={openLogModal}
-          className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-transform active:scale-95 flex items-center gap-2"
-        >
-          <Plus size={20} /> Registrar Treino
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-slate-800">Treino de Hoje</h2>
-        <div className="flex gap-2">
+      
+      {/* Seletor de Data e Controles */}
+      <div className="flex justify-between items-center bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-emerald-100 rounded-lg text-emerald-600">
+            <Calendar size={20} />
+          </div>
+          <input 
+            type="date" 
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="bg-transparent font-bold text-slate-800 outline-none cursor-pointer"
+          />
+        </div>
+        
+        {currentWorkout.length > 0 && (
           <button 
-            onClick={handleExportWorkout}
-            className={`p-2 rounded-full transition-colors ${isCopied ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'} active:scale-95`}
-            title="Copiar Treino"
+            onClick={() => setIsEditingWorkout(!isEditingWorkout)} 
+            className={`p-2 rounded-full transition-colors active:scale-95 ${isEditingWorkout ? 'bg-amber-100 text-amber-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
+            title="Editar Treino"
           >
-            {isCopied ? <CheckCircle size={24} /> : <Copy size={24} />}
+            <Edit2 size={20} />
           </button>
+        )}
+      </div>
+
+      {currentWorkout.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-[50vh] text-center space-y-4">
+          <div className="bg-slate-100 p-6 rounded-full">
+            <Play className="text-slate-400" size={48} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">Pronto para treinar?</h2>
+            <p className="text-slate-500 mt-2">Nenhum exercício registrado nesta data.</p>
+          </div>
           <button 
             onClick={openLogModal}
-            className="bg-emerald-100 text-emerald-700 p-2 rounded-full hover:bg-emerald-200 active:scale-95"
+            className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-transform active:scale-95 flex items-center gap-2"
           >
-            <Plus size={24} />
+            <Plus size={20} /> Registrar Treino
           </button>
         </div>
-      </div>
-
-      <div className="space-y-4">
-        {currentWorkout.map((workoutItem, index) => {
-          const exercise = exercises.find((e) => e.id === workoutItem.exerciseId);
-          if (!exercise) return null;
-
-          return (
-            <div key={index} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
-              <div className="flex items-center gap-4 mb-4">
-                {exercise.image ? (
-                  <img src={exercise.image} alt={exercise.name} className="w-12 h-12 rounded-lg object-cover bg-slate-100" />
-                ) : (
-                  <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400">
-                    <Dumbbell size={24} />
-                  </div>
-                )}
-                <div>
-                  <h3 className="font-bold text-slate-800">{exercise.name}</h3>
-                  <p className="text-xs text-slate-500">{exercise.muscle}</p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2 mb-3">
-                {workoutItem.sets.map((set, setIdx) => (
-                  <div key={setIdx} className="bg-slate-50 border border-slate-100 px-3 py-1.5 rounded-lg text-sm flex gap-2 items-center">
-                    <span className="text-slate-400 text-xs font-bold">{setIdx + 1}º</span>
-                    <span className="font-bold text-slate-800">
-                      {set.value} {exercise.type === 'reps' ? 'reps' : 'seg'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              
+      ) : (
+        <>
+          <div className="flex justify-between items-center">
+            <h2 className="text-2xl font-bold text-slate-800">Resumo do Dia</h2>
+            <div className="flex gap-2">
               <button 
-                onClick={() => {
-                  setSelectedExerciseForLog(exercise);
-                  openLogModal();
-                }}
-                className="w-full py-2 text-sm font-medium text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100"
+                onClick={handleExportWorkout}
+                className={`p-2 rounded-full transition-colors ${isCopied ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'} active:scale-95`}
+                title="Copiar Treino"
               >
-                + Registrar Mais Séries
+                {isCopied ? <CheckCircle size={24} /> : <Copy size={24} />}
+              </button>
+              <button 
+                onClick={openLogModal}
+                className="bg-emerald-100 text-emerald-700 p-2 rounded-full hover:bg-emerald-200 active:scale-95"
+              >
+                <Plus size={24} />
               </button>
             </div>
-          );
-        })}
-      </div>
+          </div>
+
+          <div className="space-y-4">
+            {currentWorkout.map((workoutItem, index) => {
+              const exercise = exercises.find((e) => e.id === workoutItem.exerciseId);
+              if (!exercise) return null;
+
+              return (
+                <div key={index} className={`bg-white rounded-2xl p-4 shadow-sm border transition-all ${isEditingWorkout ? 'border-amber-200 shadow-amber-100/50' : 'border-slate-100'}`}>
+                  <div className="flex items-center gap-4 mb-4">
+                    {exercise.image ? (
+                      <img src={exercise.image} alt={exercise.name} className="w-12 h-12 rounded-lg object-cover bg-slate-100" />
+                    ) : (
+                      <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 shrink-0">
+                        <Dumbbell size={24} />
+                      </div>
+                    )}
+                    <div className="flex-1">
+                      <h3 className="font-bold text-slate-800">{exercise.name}</h3>
+                      <p className="text-xs text-slate-500">{exercise.muscle}</p>
+                    </div>
+                    {isEditingWorkout && (
+                      <button 
+                        onClick={() => onRemoveExercise(exercise.id)}
+                        className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                      >
+                        <Trash2 size={20} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {workoutItem.sets.map((set, setIdx) => (
+                      <div key={setIdx} className={`border px-3 py-1.5 rounded-lg text-sm flex gap-2 items-center transition-colors ${isEditingWorkout ? 'bg-red-50 border-red-100' : 'bg-slate-50 border-slate-100'}`}>
+                        <span className="text-slate-400 text-xs font-bold">{setIdx + 1}º</span>
+                        <span className="font-bold text-slate-800">
+                          {set.value} {exercise.type === 'reps' ? 'reps' : 'seg'}
+                        </span>
+                        {isEditingWorkout && (
+                          <button 
+                            onClick={() => onRemoveSet(exercise.id, setIdx)}
+                            className="ml-1 text-red-500 bg-red-100 rounded-full p-0.5 hover:bg-red-200"
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {!isEditingWorkout && (
+                    <button 
+                      onClick={() => {
+                        setSelectedExerciseForLog(exercise);
+                        openLogModal();
+                      }}
+                      className="w-full py-2 text-sm font-medium text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors"
+                    >
+                      + Registrar Mais Séries
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -367,9 +469,23 @@ function WorkoutView({ exercises, currentWorkout, openLogModal, setSelectedExerc
 interface LibraryViewProps {
   exercises: Exercise[];
   openAddModal: () => void;
+  onDeleteExercise: (id: string) => void;
 }
 
-function LibraryView({ exercises, openAddModal }: LibraryViewProps) {
+function LibraryView({ exercises, openAddModal, onDeleteExercise }: LibraryViewProps) {
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const handleDeleteClick = (id: string) => {
+    if (confirmDeleteId === id) {
+      onDeleteExercise(id);
+      setConfirmDeleteId(null);
+    } else {
+      setConfirmDeleteId(id);
+      // Reseta a confirmação após 3 segundos
+      setTimeout(() => setConfirmDeleteId(null), 3000);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -382,7 +498,7 @@ function LibraryView({ exercises, openAddModal }: LibraryViewProps) {
              {exercise.image ? (
                 <img src={exercise.image} alt={exercise.name} className="w-16 h-16 rounded-xl object-cover bg-slate-100 shadow-sm" />
               ) : (
-                <div className="w-16 h-16 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
+                <div className="w-16 h-16 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 shrink-0">
                   <ImageIcon size={28} />
                 </div>
               )}
@@ -394,17 +510,25 @@ function LibraryView({ exercises, openAddModal }: LibraryViewProps) {
                 </span>
                 <span className="text-xs text-slate-400 flex items-center gap-1">
                   {exercise.type === 'reps' ? <Dumbbell size={12}/> : <Timer size={12}/>}
-                  {exercise.type === 'reps' ? 'Repetições' : 'Tempo'}
+                  {exercise.type === 'reps' ? 'Reps' : 'Tempo'}
                 </span>
               </div>
             </div>
+            
+            <button 
+              onClick={() => handleDeleteClick(exercise.id)}
+              className={`p-3 rounded-full transition-colors ${confirmDeleteId === exercise.id ? 'bg-red-100 text-red-600' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              title={confirmDeleteId === exercise.id ? "Toque novamente para apagar" : "Apagar exercício"}
+            >
+              {confirmDeleteId === exercise.id ? <Trash2 size={20} className="animate-pulse" /> : <Trash2 size={20} />}
+            </button>
           </div>
         ))}
       </div>
 
       <button 
         onClick={openAddModal}
-        className="fixed bottom-24 right-4 bg-slate-900 text-white p-4 rounded-full shadow-xl hover:bg-slate-800 active:scale-95 transition-transform z-10"
+        className="fixed bottom-24 right-4 bg-slate-900 text-white p-4 rounded-full shadow-xl hover:bg-slate-800 active:scale-95 transition-transform z-10 flex items-center justify-center"
       >
         <Plus size={28} />
       </button>

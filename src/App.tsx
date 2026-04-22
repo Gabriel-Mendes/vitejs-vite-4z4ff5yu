@@ -3,7 +3,7 @@ import type { ChangeEvent } from 'react';
 import { 
   Dumbbell, List, Plus, Image as ImageIcon, X, Timer, Activity, Play, 
   ChevronRight, Save, Copy, CheckCircle, Trash2, Edit2, Calendar, 
-  Moon, Sun, BarChart2, CheckSquare, PlayCircle, Clock 
+  Moon, Sun, BarChart2, CheckSquare, Clock 
 } from 'lucide-react';
 
 // Importações do Firebase
@@ -872,7 +872,7 @@ function LogExerciseModal({ exercises, selectedExercise, setSelectedExercise, on
     } else {
       setValue('');
     }
-  }, [selectedExercise?.id]);
+  }, [selectedExercise?.id, loggedSets]);
 
   const handleSaveSet = () => {
     if (!value.trim() || !selectedExercise) return;

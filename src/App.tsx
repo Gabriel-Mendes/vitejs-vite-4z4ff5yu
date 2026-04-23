@@ -3,7 +3,7 @@ import type { ChangeEvent } from 'react';
 import { 
   Dumbbell, List, Plus, Image as ImageIcon, X, Timer, Activity, Play, 
   ChevronRight, Save, Copy, CheckCircle, Trash2, Edit2, Calendar, 
-  Moon, Sun, BarChart2, CheckSquare, Clock 
+  Moon, Sun, BarChart2, CheckSquare, Clock, Pause, RotateCcw
 } from 'lucide-react';
 
 // Importações do Firebase
@@ -80,9 +80,14 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Funcionalidades Adicionais (Modo Escuro & Temporizador)
+  // Funcionalidades Adicionais
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
-  const [restTime, setRestTime] = useState<number>(0); // 0 significa inativo
+  const [restTime, setRestTime] = useState<number>(0); 
+  
+  // Estados do Cronómetro Global
+  const [isGlobalTimerOpen, setIsGlobalTimerOpen] = useState<boolean>(false);
+  const [globalTime, setGlobalTime] = useState<number>(0);
+  const [isGlobalTimerRunning, setIsGlobalTimerRunning] = useState<boolean>(false);
 
   // Modais
   const [isAddExerciseModalOpen, setIsAddExerciseModalOpen] = useState<boolean>(false);
@@ -102,7 +107,7 @@ export default function App() {
     localStorage.setItem('calitracker-theme', !isDarkMode ? 'dark' : 'light');
   };
 
-  // Lógica do Temporizador de Descanso
+  // Lógica do Temporizador de Descanso Automático (Modal de Registo)
   useEffect(() => {
     let timer: any;
     if (restTime > 0) {
@@ -112,6 +117,23 @@ export default function App() {
     }
     return () => clearInterval(timer);
   }, [restTime]);
+
+  // Lógica do Cronómetro Global
+  useEffect(() => {
+    let interval: any;
+    if (isGlobalTimerRunning) {
+      interval = setInterval(() => setGlobalTime(prev => prev + 1), 1000);
+    } else if (!isGlobalTimerRunning && globalTime !== 0) {
+      clearInterval(interval);
+    }
+    return () => clearInterval(interval);
+  }, [isGlobalTimerRunning, globalTime]);
+
+  const formatGlobalTime = (totalSecs: number) => {
+    const m = Math.floor(totalSecs / 60).toString().padStart(2, '0');
+    const s = (totalSecs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
 
   // Autenticação e Firebase Sync
   useEffect(() => {
@@ -132,8 +154,8 @@ export default function App() {
     if (!user) return;
     setIsLoading(true);
 
-    // Exercícios
-    const exRef = collection(db, 'artifacts', appId, 'users', user.uid, 'exercises');
+    // Utilizamos a pasta "public/data" para todos os seus dispositivos partilharem os mesmos dados.
+    const exRef = collection(db, 'artifacts', appId, 'public', 'data', 'exercises');
     const unsubEx = onSnapshot(exRef, (snap) => {
       if (snap.empty && exercises.length === 0) {
         INITIAL_EXERCISES.forEach(ex => setDoc(doc(exRef, ex.id), ex));
@@ -142,18 +164,14 @@ export default function App() {
       }
     });
 
-    // Rotinas
-    const rtRef = collection(db, 'artifacts', appId, 'users', user.uid, 'routines');
+    const rtRef = collection(db, 'artifacts', appId, 'public', 'data', 'routines');
     const unsubRt = onSnapshot(rtRef, (snap) => {
       setRoutines(snap.docs.map(d => d.data() as Routine));
     });
 
-    // Histórico de Treinos (Para Estatísticas)
-    const workRefAll = collection(db, 'artifacts', appId, 'users', user.uid, 'workouts');
+    const workRefAll = collection(db, 'artifacts', appId, 'public', 'data', 'workouts');
     const unsubWorkAll = onSnapshot(workRefAll, (snap) => {
       setWorkoutHistory(snap.docs.map(d => ({ date: d.id, items: d.data().items as WorkoutItem[] })));
-      
-      // Encontrar o treino da data selecionada
       const todayDoc = snap.docs.find(d => d.id === selectedDate);
       setCurrentWorkout(todayDoc ? todayDoc.data().items as WorkoutItem[] : []);
       setIsLoading(false);
@@ -165,22 +183,22 @@ export default function App() {
   // --- Handlers ---
   const handleSaveExercise = async (newEx: Exercise) => {
     if (!user) return;
-    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'exercises', newEx.id), newEx);
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'exercises', newEx.id), newEx);
   };
 
   const handleDeleteExercise = async (exerciseId: string) => {
     if (!user) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'exercises', exerciseId));
+    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'exercises', exerciseId));
   };
 
   const handleSaveRoutine = async (routine: Routine) => {
     if (!user) return;
-    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'routines', routine.id), routine);
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'routines', routine.id), routine);
   };
 
   const handleLoadRoutine = async (routine: Routine) => {
     if (!user) return;
-    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
+    const workRef = doc(db, 'artifacts', appId, 'public', 'data', 'workouts', selectedDate);
     const newWorkoutItems = routine.exercises.map(ex => ({ exerciseId: ex.id, sets: [] }));
     await setDoc(workRef, { items: newWorkoutItems, date: selectedDate }, { merge: true });
     setActiveTab('workout');
@@ -188,7 +206,7 @@ export default function App() {
 
   const handleAddSet = async (exerciseId: string, valuesArray: number[], restSeconds: number) => {
     if (!user) return;
-    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
+    const workRef = doc(db, 'artifacts', appId, 'public', 'data', 'workouts', selectedDate);
     const updatedWorkout = [...currentWorkout];
     const exerciseIndex = updatedWorkout.findIndex(w => w.exerciseId === exerciseId);
     const newSets = valuesArray.map(v => ({ value: v }));
@@ -206,7 +224,7 @@ export default function App() {
   const handleRemoveWorkoutExercise = async (exerciseId: string) => {
     if (!user) return;
     const updatedWorkout = currentWorkout.filter(w => w.exerciseId !== exerciseId);
-    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
+    const workRef = doc(db, 'artifacts', appId, 'public', 'data', 'workouts', selectedDate);
     if (updatedWorkout.length === 0) await deleteDoc(workRef);
     else await setDoc(workRef, { items: updatedWorkout, date: selectedDate }, { merge: true });
   };
@@ -221,7 +239,7 @@ export default function App() {
         updatedWorkout = updatedWorkout.filter(w => w.exerciseId !== exerciseId);
       }
     }
-    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
+    const workRef = doc(db, 'artifacts', appId, 'public', 'data', 'workouts', selectedDate);
     if (updatedWorkout.length === 0) await deleteDoc(workRef);
     else await setDoc(workRef, { items: updatedWorkout, date: selectedDate }, { merge: true });
   };
@@ -239,18 +257,42 @@ export default function App() {
             <h1 className="text-xl font-bold tracking-tight">CaliTracker</h1>
           </div>
           <div className="flex items-center gap-4">
-            <button onClick={toggleDarkMode} className="text-slate-300 hover:text-white transition-colors">
+            {/* Botão do Cronómetro Global */}
+            <button onClick={() => setIsGlobalTimerOpen(!isGlobalTimerOpen)} className="text-slate-300 hover:text-white transition-colors" title="Cronómetro Livre">
+              <Timer size={20} />
+            </button>
+            <button onClick={toggleDarkMode} className="text-slate-300 hover:text-white transition-colors" title="Modo Escuro">
               {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
             </button>
-            {user && <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" title="Online (Nuvem)" />}
+            {user && <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" title="Sincronizado" />}
           </div>
         </div>
       </header>
 
-      {/* Temporizador Flutuante */}
+      {/* Widget do Cronómetro Global */}
+      {isGlobalTimerOpen && (
+        <div className={`fixed top-20 right-4 z-40 shadow-xl rounded-2xl p-4 flex flex-col items-center animate-in slide-in-from-top-4 border ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+          <div className="text-4xl font-black text-emerald-500 mb-4 font-mono">
+            {formatGlobalTime(globalTime)}
+          </div>
+          <div className="flex gap-3">
+            <button onClick={() => setIsGlobalTimerRunning(!isGlobalTimerRunning)} className={`p-3 rounded-full transition-colors ${isDarkMode ? 'bg-slate-800 hover:bg-slate-700' : 'bg-slate-100 hover:bg-slate-200'}`}>
+              {isGlobalTimerRunning ? <Pause size={20} className={isDarkMode ? 'text-slate-300' : 'text-slate-700'} /> : <Play size={20} className="text-emerald-500" />}
+            </button>
+            <button onClick={() => { setIsGlobalTimerRunning(false); setGlobalTime(0); }} className={`p-3 rounded-full transition-colors ${isDarkMode ? 'bg-slate-800 hover:bg-slate-700' : 'bg-slate-100 hover:bg-slate-200'}`}>
+              <RotateCcw size={20} className={isDarkMode ? 'text-slate-300' : 'text-slate-700'} />
+            </button>
+            <button onClick={() => setIsGlobalTimerOpen(false)} className={`p-3 rounded-full transition-colors ${isDarkMode ? 'bg-slate-800 hover:bg-red-900/40 text-red-500' : 'bg-slate-100 hover:bg-red-100 text-red-500'}`}>
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Temporizador Flutuante de Descanso (Automático das séries) */}
       {restTime > 0 && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-30 animate-in slide-in-from-top-4">
-          <div className={`flex items-center gap-3 px-6 py-3 rounded-full shadow-lg border backdrop-blur-md font-bold
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-30 animate-in slide-in-from-top-4 pointer-events-none">
+          <div className={`flex items-center gap-3 px-6 py-3 rounded-full shadow-lg border backdrop-blur-md font-bold pointer-events-auto
             ${isDarkMode ? 'bg-emerald-900/90 border-emerald-700 text-white' : 'bg-emerald-500/90 border-emerald-400 text-white'}`}>
             <Clock size={20} className="animate-pulse" />
             <span>Descanso: {Math.floor(restTime / 60)}:{(restTime % 60).toString().padStart(2, '0')}</span>
@@ -264,7 +306,7 @@ export default function App() {
         {isLoading ? (
           <div className="flex flex-col items-center justify-center h-[60vh] text-emerald-500">
             <Activity size={48} className="animate-pulse" />
-            <p className="mt-4 opacity-70 font-medium">Sincronizando...</p>
+            <p className="mt-4 opacity-70 font-medium">A carregar...</p>
           </div>
         ) : (
           <>
@@ -865,12 +907,17 @@ function LogExerciseModal({ exercises, selectedExercise, setSelectedExercise, on
   const currentItem = currentWorkout.find(w => w.exerciseId === selectedExercise?.id);
   const loggedSets = currentItem?.sets || [];
 
-  // Auto-preencher com o último valor registado e mostrar histórico
+  // Usamos apenas o ID do exercício para não refazer a cada vez que escreve uma letra.
+  const lastExId = useRef<string | null>(null);
+
   useEffect(() => {
-    if (selectedExercise && loggedSets.length > 0) {
-      setValue(loggedSets[loggedSets.length - 1].value.toString());
-    } else {
-      setValue('');
+    if (selectedExercise?.id !== lastExId.current) {
+      if (selectedExercise && loggedSets.length > 0) {
+        setValue(loggedSets[loggedSets.length - 1].value.toString());
+      } else {
+        setValue('');
+      }
+      lastExId.current = selectedExercise?.id || null;
     }
   }, [selectedExercise?.id, loggedSets]);
 

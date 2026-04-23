@@ -3,18 +3,18 @@ import type { ChangeEvent } from 'react';
 import { 
   Dumbbell, List, Plus, Image as ImageIcon, X, Timer, Activity, Play, 
   ChevronRight, Save, Copy, CheckCircle, Trash2, Edit2, Calendar, 
-  Moon, Sun, BarChart2, CheckSquare, Clock, Pause, RotateCcw
+  Moon, Sun, BarChart2, CheckSquare, Clock, Pause, RotateCcw, LogOut
 } from 'lucide-react';
 
 // Importações do Firebase
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, signInWithCustomToken } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 
 // Sua configuração do Firebase
 // @ts-ignore
-const firebaseConfig = {
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
   apiKey: "AIzaSyC5S8UckXqCkAZvc70kUeFjZgjYepZ4jo0",
   authDomain: "calitracker-app.firebaseapp.com",
   projectId: "calitracker-app",
@@ -78,6 +78,7 @@ export default function App() {
   
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toLocaleDateString('en-CA'));
   const [user, setUser] = useState<User | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Funcionalidades Adicionais
@@ -135,27 +136,35 @@ export default function App() {
     return `${m}:${s}`;
   };
 
-  // Autenticação e Firebase Sync
+  // Autenticação (Conta Google ou Persistida)
   useEffect(() => {
     const initAuth = async () => {
       try {
-        await signInAnonymously(auth);
+        // @ts-ignore (Apenas para garantir que o ambiente de preview não trava)
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          // @ts-ignore
+          await signInWithCustomToken(auth, __initial_auth_token);
+        }
       } catch (error) {
-        console.error("Erro na autenticação:", error);
+        console.error("Erro no token de ambiente:", error);
       }
     };
     initAuth();
     
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsLoadingAuth(false);
+    });
     return () => unsubscribe();
   }, []);
 
+  // Buscar Dados do Firestore 
   useEffect(() => {
     if (!user) return;
     setIsLoading(true);
 
-    // Utilizamos a pasta "public/data" para todos os seus dispositivos partilharem os mesmos dados.
-    const exRef = collection(db, 'artifacts', appId, 'public', 'data', 'exercises');
+    // Desta vez usamos a pasta do utilizador com Login (Google). Assim é partilhado no PC e Telemóvel!
+    const exRef = collection(db, 'artifacts', appId, 'users', user.uid, 'exercises');
     const unsubEx = onSnapshot(exRef, (snap) => {
       if (snap.empty && exercises.length === 0) {
         INITIAL_EXERCISES.forEach(ex => setDoc(doc(exRef, ex.id), ex));
@@ -164,12 +173,12 @@ export default function App() {
       }
     });
 
-    const rtRef = collection(db, 'artifacts', appId, 'public', 'data', 'routines');
+    const rtRef = collection(db, 'artifacts', appId, 'users', user.uid, 'routines');
     const unsubRt = onSnapshot(rtRef, (snap) => {
       setRoutines(snap.docs.map(d => d.data() as Routine));
     });
 
-    const workRefAll = collection(db, 'artifacts', appId, 'public', 'data', 'workouts');
+    const workRefAll = collection(db, 'artifacts', appId, 'users', user.uid, 'workouts');
     const unsubWorkAll = onSnapshot(workRefAll, (snap) => {
       setWorkoutHistory(snap.docs.map(d => ({ date: d.id, items: d.data().items as WorkoutItem[] })));
       const todayDoc = snap.docs.find(d => d.id === selectedDate);
@@ -183,22 +192,22 @@ export default function App() {
   // --- Handlers ---
   const handleSaveExercise = async (newEx: Exercise) => {
     if (!user) return;
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'exercises', newEx.id), newEx);
+    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'exercises', newEx.id), newEx);
   };
 
   const handleDeleteExercise = async (exerciseId: string) => {
     if (!user) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'exercises', exerciseId));
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'exercises', exerciseId));
   };
 
   const handleSaveRoutine = async (routine: Routine) => {
     if (!user) return;
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'routines', routine.id), routine);
+    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'routines', routine.id), routine);
   };
 
   const handleLoadRoutine = async (routine: Routine) => {
     if (!user) return;
-    const workRef = doc(db, 'artifacts', appId, 'public', 'data', 'workouts', selectedDate);
+    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
     const newWorkoutItems = routine.exercises.map(ex => ({ exerciseId: ex.id, sets: [] }));
     await setDoc(workRef, { items: newWorkoutItems, date: selectedDate }, { merge: true });
     setActiveTab('workout');
@@ -206,7 +215,7 @@ export default function App() {
 
   const handleAddSet = async (exerciseId: string, valuesArray: number[], restSeconds: number) => {
     if (!user) return;
-    const workRef = doc(db, 'artifacts', appId, 'public', 'data', 'workouts', selectedDate);
+    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
     const updatedWorkout = [...currentWorkout];
     const exerciseIndex = updatedWorkout.findIndex(w => w.exerciseId === exerciseId);
     const newSets = valuesArray.map(v => ({ value: v }));
@@ -224,7 +233,7 @@ export default function App() {
   const handleRemoveWorkoutExercise = async (exerciseId: string) => {
     if (!user) return;
     const updatedWorkout = currentWorkout.filter(w => w.exerciseId !== exerciseId);
-    const workRef = doc(db, 'artifacts', appId, 'public', 'data', 'workouts', selectedDate);
+    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
     if (updatedWorkout.length === 0) await deleteDoc(workRef);
     else await setDoc(workRef, { items: updatedWorkout, date: selectedDate }, { merge: true });
   };
@@ -239,12 +248,26 @@ export default function App() {
         updatedWorkout = updatedWorkout.filter(w => w.exerciseId !== exerciseId);
       }
     }
-    const workRef = doc(db, 'artifacts', appId, 'public', 'data', 'workouts', selectedDate);
+    const workRef = doc(db, 'artifacts', appId, 'users', user.uid, 'workouts', selectedDate);
     if (updatedWorkout.length === 0) await deleteDoc(workRef);
     else await setDoc(workRef, { items: updatedWorkout, date: selectedDate }, { merge: true });
   };
 
-  // Tema CSS Central
+  // Ecrã de Carregamento da Autenticação
+  if (isLoadingAuth) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${isDarkMode ? 'bg-slate-950' : 'bg-slate-50'}`}>
+        <Activity className="animate-pulse text-emerald-500" size={48} />
+      </div>
+    );
+  }
+
+  // Ecrã de Login (se não estiver autenticado)
+  if (!user) {
+    return <LoginScreen isDark={isDarkMode} onToggleDark={toggleDarkMode} />;
+  }
+
+  // Tema CSS Central (App Principal)
   const themeClass = isDarkMode ? 'dark bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900';
 
   return (
@@ -257,14 +280,15 @@ export default function App() {
             <h1 className="text-xl font-bold tracking-tight">CaliTracker</h1>
           </div>
           <div className="flex items-center gap-4">
-            {/* Botão do Cronómetro Global */}
-            <button onClick={() => setIsGlobalTimerOpen(!isGlobalTimerOpen)} className="text-slate-300 hover:text-white transition-colors" title="Cronómetro Livre">
+            <button onClick={() => setIsGlobalTimerOpen(!isGlobalTimerOpen)} className="text-slate-300 hover:text-emerald-400 transition-colors" title="Cronómetro Livre">
               <Timer size={20} />
             </button>
             <button onClick={toggleDarkMode} className="text-slate-300 hover:text-white transition-colors" title="Modo Escuro">
               {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
             </button>
-            {user && <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" title="Sincronizado" />}
+            <button onClick={() => signOut(auth)} className="text-slate-300 hover:text-red-400 transition-colors" title="Terminar Sessão">
+              <LogOut size={20} />
+            </button>
           </div>
         </div>
       </header>
@@ -289,7 +313,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Temporizador Flutuante de Descanso (Automático das séries) */}
+      {/* Temporizador Flutuante de Descanso */}
       {restTime > 0 && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-30 animate-in slide-in-from-top-4 pointer-events-none">
           <div className={`flex items-center gap-3 px-6 py-3 rounded-full shadow-lg border backdrop-blur-md font-bold pointer-events-auto
@@ -306,7 +330,7 @@ export default function App() {
         {isLoading ? (
           <div className="flex flex-col items-center justify-center h-[60vh] text-emerald-500">
             <Activity size={48} className="animate-pulse" />
-            <p className="mt-4 opacity-70 font-medium">A carregar...</p>
+            <p className="mt-4 opacity-70 font-medium">A carregar os seus treinos...</p>
           </div>
         ) : (
           <>
@@ -368,6 +392,54 @@ export default function App() {
           currentWorkout={currentWorkout}
         />
       )}
+    </div>
+  );
+}
+
+// --- ECRÃ DE LOGIN ---
+function LoginScreen({ isDark, onToggleDark }: { isDark: boolean, onToggleDark: () => void }) {
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleGoogleLogin = async () => {
+    try {
+      setErrorMsg(null);
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (error: any) {
+      console.error(error);
+      setErrorMsg("Falha ao iniciar sessão. Certifique-se de que ativou o Google Login na consola do Firebase e que o domínio está autorizado.");
+    }
+  };
+
+  return (
+    <div className={`min-h-screen flex flex-col items-center justify-center p-4 transition-colors duration-300 ${isDark ? 'bg-slate-950 text-white' : 'bg-slate-50 text-slate-900'}`}>
+      <button onClick={onToggleDark} className="absolute top-4 right-4 p-2 rounded-full text-slate-400 hover:text-emerald-500 transition-colors">
+        {isDark ? <Sun size={24} /> : <Moon size={24} />}
+      </button>
+
+      <div className={`w-full max-w-md p-8 rounded-3xl shadow-xl border flex flex-col items-center text-center ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
+        <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-6 ${isDark ? 'bg-emerald-950/50 text-emerald-400' : 'bg-emerald-100 text-emerald-600'}`}>
+          <Activity size={40} />
+        </div>
+        <h1 className="text-3xl font-black mb-2">CaliTracker</h1>
+        <p className={`mb-8 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+          Inicie sessão para sincronizar os seus treinos de calistenia em qualquer dispositivo.
+        </p>
+
+        {errorMsg && (
+          <div className="bg-red-500/10 text-red-500 p-3 rounded-lg text-sm mb-6 font-medium border border-red-500/20">
+            {errorMsg}
+          </div>
+        )}
+
+        <button 
+          onClick={handleGoogleLogin}
+          className="w-full bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-3"
+        >
+          <svg className="w-5 h-5 bg-white rounded-full p-0.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+          Continuar com o Google
+        </button>
+      </div>
     </div>
   );
 }
@@ -821,7 +893,7 @@ function AddExerciseModal({ onClose, onSave, isDark, initialData }: AddExerciseM
           <div>
             <label className="block text-sm font-bold opacity-70 mb-1">Equipamento</label>
             <select value={equipment} onChange={e => setEquipment(e.target.value)} className={`w-full p-3 rounded-xl border outline-none transition-all ${inputBg} appearance-none`}>
-              <option>Peso Corporal</option><option>Barra Fixa</option><option>Argolas</option><option>Paralelas</option><option>Halteres</option>
+              <option>Peso Corporal</option><option>Barra Fixa</option><option>Argolas</option><option>Corda</option><option>Halteres</option>
             </select>
           </div>
 
